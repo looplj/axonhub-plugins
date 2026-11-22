@@ -171,15 +171,24 @@ def publish_asset(repository, existing, slug, metadata, asset, summary):
     command("gh", "release", "edit", tag, *opts, "--draft=false", "--latest=false")
 
 
-def publish(repository, sources):
+def publish(repository, sources, external):
     existing = releases(repository)
+    ids_by_slug = {slug: metadata["id"] for slug, metadata in sources.items()}
+    slugs_by_id = {entry["id"]: None for entry in external}
+    slugs_by_id.update({plugin_id: slug for slug, plugin_id in ids_by_slug.items()})
+    for tag, release in existing.items():
+        if release["draft"]:
+            continue
+        slug, _ = TAG.fullmatch(tag).groups()
+        plugin_id = release_metadata(release)["id"]
+        if ids_by_slug.setdefault(slug, plugin_id) != plugin_id or slugs_by_id.setdefault(plugin_id, slug) != slug:
+            raise ValueError(f"{tag}: plugin ID conflicts with the sources, release history or external registry")
+
     with TemporaryDirectory() as directory:
         for slug, metadata in sources.items():
             tag = f"{slug}/v{metadata['version']}"
             current = existing.get(tag)
             if current and not current["draft"]:
-                if release_metadata(current)["id"] != metadata["id"]:
-                    raise ValueError(f"{tag}: plugin ID changed")
                 continue
             asset = pack(slug, metadata, directory)
             publish_asset(repository, current, slug, metadata, asset, metadata["description"])
@@ -237,7 +246,7 @@ def main():
     else:
         repository = os.environ["GITHUB_REPOSITORY"]
         if args.action == "publish":
-            publish(repository, sources)
+            publish(repository, sources, external)
         registry(repository, sources, external)
 
 
