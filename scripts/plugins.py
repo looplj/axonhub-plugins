@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 from urllib.parse import urlsplit
 from zipfile import ZipFile
 
@@ -165,9 +166,15 @@ def publish_asset(repository, existing, slug, metadata, asset, summary):
             "--target", command("git", "rev-parse", "HEAD", capture=True),
             "--title", f"{metadata['name']} {version}", "--notes", notes(metadata, digest, summary),
         )
-    release = releases(repository)[tag]
-    if not release_asset(release, release_metadata(release)):
-        raise ValueError(f"{tag}: missing package")
+    # GitHub's release list can lag behind a successful upload.
+    for delay in (0, 1, 2, 4):
+        if delay:
+            time.sleep(delay)
+        release = releases(repository).get(tag)
+        if release and release_asset(release, release_metadata(release)):
+            break
+    else:
+        raise ValueError(f"{tag}: uploaded package did not appear in the release list")
     command("gh", "release", "edit", tag, *opts, "--draft=false", "--latest=false")
 
 
