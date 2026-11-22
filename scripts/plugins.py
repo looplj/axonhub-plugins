@@ -15,7 +15,9 @@ from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
-VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+NUM = r"(?:0|[1-9][0-9]*)"
+PRERELEASE = rf"(?:{NUM}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+VERSION = rf"{NUM}\.{NUM}\.{NUM}(?:-{PRERELEASE}(?:\.{PRERELEASE})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 TAG = re.compile(rf"({SLUG})/v({VERSION})")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MARKER = "\n\n<!-- axonhub-registry\n"
@@ -39,7 +41,7 @@ def identity(manifest):
         if not values[field].strip():
             raise ValueError(f"Missing manifest field: {field}")
     if not re.fullmatch(VERSION, values["version"]):
-        raise ValueError(f"{values['id']}: releases use a stable MAJOR.MINOR.PATCH version")
+        raise ValueError(f"{values['id']}: invalid semantic version")
     return values
 
 
@@ -151,6 +153,10 @@ def publish_asset(repository, existing, slug, metadata, asset, summary):
         previous = release_metadata(existing)
         if previous != {**metadata, "sha256": digest}:
             raise ValueError(f"{tag}: pending release contains different bytes; publish a new version")
+        for pending in existing["assets"]:
+            if pending["name"] == asset.name and pending["state"] == "starter":
+                command("gh", "api", "--method", "DELETE", f"repos/{repository}/releases/assets/{pending['id']}")
+        existing["assets"] = [item for item in existing["assets"] if item["state"] != "starter"]
         if not release_asset(existing, previous):
             command("gh", "release", "upload", tag, str(asset), *opts)
     else:
@@ -180,7 +186,9 @@ def publish(repository, sources):
 
 
 def version_key(version):
-    return tuple(map(int, version.split(".")))
+    core, _, prerelease = version.split("+", 1)[0].partition("-")
+    identifiers = tuple((0, int(part)) if part.isdigit() else (1, part) for part in prerelease.split(".")) if prerelease else ()
+    return tuple(map(int, core.split("."))), not prerelease, identifiers
 
 
 def registry(repository, sources, external):

@@ -21,7 +21,7 @@ go install github.com/looplj/axonhub/cmd/pack-plugin@c2826aa422821d88c717502a72c
 python3 scripts/plugins.py check
 ```
 
-发布时在 PR 中递增插件 `manifest.json` 的版本（`MAJOR.MINOR.PATCH`）。合并到 `main` 后，Release workflow 为新版本生成 `<目录名>-<版本>.axplugin`，发布到 `<目录名>/v<版本>`，再更新索引。已发布版本的包保持固定。workflow 可以手动重跑，补齐未完成的发布。
+发布时在 PR 中递增插件 `manifest.json` 的版本（SemVer）。合并到 `main` 后，Release workflow 为新版本生成 `<目录名>-<版本>.axplugin`，发布到 `<目录名>/v<版本>`，再更新索引。已发布版本的包保持固定。workflow 可以手动重跑，补齐未完成的发布。
 
 ## 外部维护的插件
 
