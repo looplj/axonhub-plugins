@@ -1,2 +1,3 @@
 *.axplugin
 __pycache__/
+/axonhub/

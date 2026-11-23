@@ -1,9 +1,18 @@
 name: Release plugins
 
 on:
+  repository_dispatch:
+    types: [community-plugins]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full AxonHub commit SHA to package
+        required: true
+        type: string
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - external-plugins.json
 
 permissions:
   contents: read
@@ -14,7 +23,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -24,6 +33,25 @@ jobs:
         with:
           # A queued run must reconcile current main.
           ref: main
+      - name: Resolve AxonHub source commit
+        id: source
+        env:
+          EVENT_SHA: ${{ github.event.client_payload.sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          sha="${EVENT_SHA:-$INPUT_SHA}"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The community-plugins event must include the full AxonHub commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out AxonHub
+        uses: actions/checkout@v4
+        with:
+          repository: looplj/axonhub
+          ref: ${{ steps.source.outputs.sha }}
+          path: axonhub
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.4'
@@ -34,11 +62,36 @@ jobs:
       - name: Install pack-plugin
         run: go install github.com/looplj/axonhub/cmd/pack-plugin@c2826aa422821d88c717502a72c87395dcdb3cb3
       - name: Test and package plugins
-        run: python3 scripts/plugins.py check
+        run: python3 scripts/plugins.py check --source-root axonhub
       - name: Reconcile releases and registry
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/plugins.py publish
+        run: python3 scripts/plugins.py publish --source-root axonhub --source-sha "${{ steps.source.outputs.sha }}"
+      - name: Publish registry
+        run: |
+          git add registry.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'Update plugin registry'
+          git push origin HEAD:main
+
+  index:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Rebuild registry from external plugins
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/plugins.py index
       - name: Publish registry
         run: |
           git add registry.json

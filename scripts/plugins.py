@@ -15,6 +15,8 @@ from zipfile import ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_REPOSITORY = "https://github.com/looplj/axonhub"
+SOURCE_PATH = Path("plugins/community")
 SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 NUM = r"(?:0|[1-9][0-9]*)"
 PRERELEASE = rf"(?:{NUM}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -46,16 +48,30 @@ def identity(manifest):
     return values
 
 
-def plugin_sources():
+def pinned_source(source_root, expected):
+    if not re.fullmatch(r"[0-9a-f]{40}", expected or ""):
+        raise ValueError("--source-sha must be the full AxonHub commit SHA")
+    actual = command("git", "-C", str(source_root), "rev-parse", "HEAD", capture=True)
+    if actual != expected:
+        raise ValueError(f"AxonHub checkout is at {actual}; --source-sha requires {expected}")
+    status = command("git", "-C", str(source_root), "status", "--porcelain", "--untracked-files=all", capture=True)
+    if status:
+        raise ValueError("AxonHub checkout has uncommitted changes")
+    return expected
+
+
+def plugin_sources(source_directory):
     sources = {}
     ids = set()
-    for path in sorted((ROOT / "plugins").glob("*/manifest.json")):
+    for path in sorted(source_directory.glob("*/manifest.json")):
         slug = path.parent.name
         metadata = identity(read_json(path))
         if not re.fullmatch(SLUG, slug) or metadata["id"] in ids:
             raise ValueError(f"Invalid plugin directory or duplicate plugin ID: {path.parent}")
         sources[slug] = metadata
         ids.add(metadata["id"])
+    if not sources:
+        raise ValueError(f"No plugin manifests found in {source_directory}")
     return sources
 
 
@@ -87,23 +103,25 @@ def read_external(managed_ids):
     return entries
 
 
-def pack(slug, metadata, directory):
+def pack(source, metadata, directory):
+    slug = source.name
     asset = Path(directory) / f"{slug}-{metadata['version']}.axplugin"
     packer = os.environ.get("PACK_PLUGIN", "pack-plugin")
-    command(packer, str(ROOT / "plugins" / slug), "-o", str(asset))
+    command(packer, str(source), "-o", str(asset))
     with ZipFile(asset) as archive:
         if identity(json.loads(archive.read("manifest.json"))) != metadata:
             raise ValueError(f"{asset.name}: manifest differs from plugin source")
     return asset
 
 
-def check(sources):
+def check(source_directory, sources):
     with TemporaryDirectory() as directory:
         for slug, metadata in sources.items():
-            tests = sorted((ROOT / "plugins" / slug).rglob("*.test.mjs"))
+            source = source_directory / slug
+            tests = sorted(source.rglob("*.test.mjs"))
             if tests:
                 command("node", "--test", *map(str, tests))
-            pack(slug, metadata, directory)
+            pack(source, metadata, directory)
 
 
 def releases(repository):
@@ -178,7 +196,7 @@ def publish_asset(repository, existing, slug, metadata, asset, summary):
     command("gh", "release", "edit", tag, *opts, "--draft=false", "--latest=false")
 
 
-def publish(repository, sources, external):
+def publish(repository, source_directory, source_sha, sources, external):
     existing = releases(repository)
     ids_by_slug = {slug: metadata["id"] for slug, metadata in sources.items()}
     slugs_by_id = {entry["id"]: None for entry in external}
@@ -197,8 +215,10 @@ def publish(repository, sources, external):
             current = existing.get(tag)
             if current and not current["draft"]:
                 continue
-            asset = pack(slug, metadata, directory)
-            publish_asset(repository, current, slug, metadata, asset, metadata["description"])
+            asset = pack(source_directory / slug, metadata, directory)
+            source_url = f"{SOURCE_REPOSITORY}/tree/{source_sha}/{SOURCE_PATH.as_posix()}/{slug}"
+            summary = f"{metadata['description']}\n\nAxonHub source commit [{source_sha}]({source_url})"
+            publish_asset(repository, current, slug, metadata, asset, summary)
 
 
 def version_key(version):
@@ -207,7 +227,7 @@ def version_key(version):
     return tuple(map(int, core.split("."))), not prerelease, identifiers
 
 
-def registry(repository, sources, external):
+def published_releases(repository):
     published = {}
     for tag, release in sorted(releases(repository).items()):
         if release["draft"]:
@@ -220,6 +240,10 @@ def registry(repository, sources, external):
         published.setdefault(slug, []).append((metadata, {
             "version": version, "url": url, "sha256": metadata["sha256"], "axonhubVersion": metadata["axonhubVersion"],
         }))
+    return published
+
+
+def catalog(published):
     entries = []
     for slug, versions in sorted(published.items()):
         versions.sort(key=lambda release: version_key(release[1]["version"]), reverse=True)
@@ -230,30 +254,54 @@ def registry(repository, sources, external):
             **{key: latest[key] for key in ("id", "name", "description")},
             "versions": [version for _, version in versions],
         })
-    all_entries = entries + external
-    ids = {entry["id"] for entry in all_entries}
-    if len(ids) != len(all_entries):
+    return entries
+
+
+def write_registry(entries):
+    ids = {entry["id"] for entry in entries}
+    if len(ids) != len(entries):
         raise ValueError("Duplicate plugin ID across published releases and external plugins")
+    (ROOT / "registry.json").write_text(
+        json.dumps({"schemaVersion": 1, "plugins": entries}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+
+
+def registry(repository, sources, external):
+    published = published_releases(repository)
     for slug, metadata in sources.items():
         if not any(item["version"] == metadata["version"] and src["id"] == metadata["id"] for src, item in published.get(slug, [])):
             raise ValueError(f"{slug}: source version {metadata['version']} has not been published")
-    (ROOT / "registry.json").write_text(
-        json.dumps({"schemaVersion": 1, "plugins": all_entries}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-    )
+    write_registry(catalog(published) + external)
+
+
+def index(repository):
+    entries = catalog(published_releases(repository))
+    external = read_external(entry["id"] for entry in entries)
+    write_registry(entries + external)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("check", "publish", "registry"))
+    parser.add_argument("action", choices=("check", "publish", "registry", "index"))
+    parser.add_argument("--source-root", type=Path, help="Path to the AxonHub checkout")
+    parser.add_argument("--source-sha", help="Full AxonHub commit SHA carried by the release event")
     args = parser.parse_args()
-    sources = plugin_sources()
+    if args.action == "index":
+        index(os.environ["GITHUB_REPOSITORY"])
+        return
+    if args.source_root is None:
+        raise ValueError("--source-root is required")
+    source_root = args.source_root.resolve()
+    source_directory = source_root / SOURCE_PATH
+    sources = plugin_sources(source_directory)
     external = read_external(metadata["id"] for metadata in sources.values())
     if args.action == "check":
-        check(sources)
+        check(source_directory, sources)
     else:
+        source_sha = pinned_source(source_root, args.source_sha)
         repository = os.environ["GITHUB_REPOSITORY"]
         if args.action == "publish":
-            publish(repository, sources, external)
+            publish(repository, source_directory, source_sha, sources, external)
         registry(repository, sources, external)
 
 
