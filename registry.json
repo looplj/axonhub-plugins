@@ -20,6 +20,12 @@
       "description": "在请求进入上游模型之前，用 Jev 判断一组可配置的分类。任一分类达到拦截阈值时返回 403，并写入拦截记录。低于阈值的请求继续，不落库。",
       "versions": [
         {
+          "version": "0.3.1",
+          "url": "https://github.com/looplj/axonhub-plugins/releases/download/jev-guard/v0.3.1/jev-guard-0.3.1.axplugin",
+          "sha256": "d61904bad7d08378061c589e37472e0ad5c6bf942b7d70a0c3c4d9061f7f8f2b",
+          "axonhubVersion": "^1.0.0"
+        },
+        {
           "version": "0.3.0",
           "url": "https://github.com/looplj/axonhub-plugins/releases/download/jev-guard/v0.3.0/jev-guard-0.3.0.axplugin",
           "sha256": "15959484e205848ea10042e6fe455af9a2b0ceb0688abe7f7963e8335fd84b5b",
