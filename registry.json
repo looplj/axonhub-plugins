@@ -40,6 +40,19 @@
       ]
     },
     {
+      "id": "local.model-catalog-check",
+      "name": "Model catalog check",
+      "description": "Check configured models and followed reference prices. Signed-in users can view the scope and counts.",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "url": "https://github.com/looplj/axonhub-plugins/releases/download/model-catalog-check/v0.1.0/model-catalog-check-0.1.0.axplugin",
+          "sha256": "6afc598a013387af026e455c684183245a78ad3467f91b96891a42862844e012",
+          "axonhubVersion": "^1.0.0"
+        }
+      ]
+    },
+    {
       "id": "local.request-live",
       "name": "实时请求",
       "description": "实时查看客户端、API 密钥，以及这些请求实际打到的渠道。",
